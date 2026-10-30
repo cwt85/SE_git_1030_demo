@@ -1,0 +1,2 @@
+-r requirements-db.txt
+pytest>=8,<10

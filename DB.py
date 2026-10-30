@@ -113,6 +113,8 @@ def _required_text(value: Any, label: str, limit: int) -> str:
 def normalize_phone(value: str) -> str:
     value = _required_text(value, "電話", 60)
     value = re.sub(r"[\s()\-]", "", unicodedata.normalize("NFKC", value))
+    if re.fullmatch(r"\+?8869[0-9]{8}", value):
+        value = "0" + value[-9:]
     if not re.fullmatch(r"\+?[0-9]{6,29}", value) or len(value) > 30:
         raise InvalidInput("電話需為 6 至 29 位數字，可含開頭的 +。")
     return value

@@ -1,21 +1,19 @@
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from uuid import uuid4
 
 import pytest
-from alembic import command
-from alembic.config import Config
-from sqlalchemy import create_engine, func, select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
-from DB import (Database, DuplicateRegistration, EventNotFound, InvalidInput,
-                RegistrationClosed, database_url, normalize_phone)
+from DB import (DuplicateRegistration, EventNotFound, InvalidInput,
+                RegistrationClosed, normalize_phone)
 
 
 @pytest.mark.parametrize("raw, expected", [
     ("0912-345-678", "0912345678"),
     (" ０９１２ ３４５ ６７８ ", "0912345678"),
-    ("+886 (912) 345-678", "+886912345678"),
+    ("+886 (912) 345-678", "0912345678"),
+    ("886912345678", "0912345678"),
+    ("+1 (202) 555-0100", "+12025550100"),
 ])
 def test_phone_normalization(raw, expected):
     assert normalize_phone(raw) == expected
@@ -25,26 +23,6 @@ def test_phone_normalization(raw, expected):
 def test_reject_bad_phones(value):
     with pytest.raises(InvalidInput):
         normalize_phone(value)
-
-
-@pytest.fixture
-def database():
-    # Every integration test gets a PostgreSQL schema inside an outer transaction.
-    # Even its Alembic tables/DDL are rolled back, so public demo/user rows are untouched.
-    engine = create_engine(database_url(), connect_args={"connect_timeout": 5})
-    with engine.connect() as connection:
-        outer = connection.begin()
-        schema = "test_db_" + uuid4().hex
-        try:
-            connection.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
-            connection.exec_driver_sql(f'SET LOCAL search_path TO "{schema}"')
-            config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
-            config.attributes["connection"] = connection
-            command.upgrade(config, "head")
-            yield Database(connection), connection
-        finally:
-            outer.rollback()
-    engine.dispose()
 
 
 @pytest.mark.integration
@@ -68,6 +46,8 @@ def test_duplicates_and_recovery(database):
     db.register(first, name="測試甲", phone="0912345678")
     with pytest.raises(DuplicateRegistration):
         db.register(first, name=" 測試甲 ", phone="０９１２-３４５-６７８")
+    with pytest.raises(DuplicateRegistration):
+        db.register(first, name="測試甲", phone="+886912345678")
     db.register(second, name="測試甲", phone="0912345678")
     db.register(first, name="測試乙", phone="0912345678")
     db.register(first, name="測試甲", phone="0987654321")

@@ -1,0 +1,3 @@
+-r requirements.txt
+-r requirements-db-dev.txt
+httpx>=0.27,<1

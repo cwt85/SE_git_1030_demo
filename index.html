@@ -85,6 +85,7 @@
     .badge.closed::before { background: #a5aca8; }
     .event-body { padding: 17px 18px 16px; }
     .event-date { margin: 0 0 7px; color: var(--orange); font-size: 11px; font-weight: 800; letter-spacing: .04em; }
+    .event-deadline { margin: -1px 0 8px; color: #8a6653; font-size: 11px; }
     .event-title { margin: 0; font-size: 18px; letter-spacing: -.025em; }
     .event-description { min-height: 42px; margin: 8px 0 13px; color: #77827b; font-size: 12px; line-height: 1.7; }
     .event-meta { display: flex; flex-wrap: wrap; gap: 11px; padding: 12px 0; border-top: 1px solid #eff0ed; color: #737e77; font-size: 11px; }
@@ -235,6 +236,7 @@
     ];
 
     let events = [];
+    let demoMode = false;
     let activeFilter = "all";
     let searchTerm = "";
     const dialog = document.querySelector("#app-dialog");
@@ -286,9 +288,12 @@
         const result = await requestApi("/events");
         const rows = Array.isArray(result) ? result : (result?.items || []);
         events = rows.map(normalizeEvent);
+        demoMode = false;
       } catch (error) {
         if (!isNetworkError(error)) showToast(error.message, true);
         events = readDemoEvents();
+        demoMode = true;
+        if (isNetworkError(error)) showToast("目前無法連線到後端，正在使用本機展示資料；報名不會寫入 PostgreSQL。", true);
       }
       renderEvents();
     }
@@ -313,10 +318,14 @@
         if (!isNetworkError(error)) throw error;
         const event = events.find(item => String(item.id) === String(eventId));
         if (!event || !isEventOpen(event)) throw new Error("這場活動目前已停止報名。");
-        const duplicated = (event.registrations || []).some(row => row.name.trim() === data.name.trim() && row.phone === data.phone);
-        if (duplicated) throw new Error("你已經報名過這場活動了。");
+        const duplicated = (event.registrations || []).some(row =>
+          row.name.trim().toLocaleLowerCase() === data.name.trim().toLocaleLowerCase() &&
+          normalizePhone(row.phone) === normalizePhone(data.phone)
+        );
+        if (duplicated) throw new Error("報名失敗：同一活動中，相同姓名與電話不可重複報名。");
+        if (!isEventOpen(event)) throw new Error("這場活動已截止報名，無法再送出資料。");
         event.registrations ||= [];
-        event.registrations.push({ ...data, created_at: new Date().toISOString() });
+        event.registrations.push({ ...data, phone: normalizePhone(data.phone), created_at: new Date().toISOString() });
         event.registration_count = event.registrations.length;
         saveDemoEvents();
         renderEvents();
@@ -359,6 +368,13 @@
         date: new Intl.DateTimeFormat("zh-TW", { month: "long", day: "numeric", weekday: "short" }).format(date),
         time: new Intl.DateTimeFormat("zh-TW", { hour: "2-digit", minute: "2-digit", hour12: false }).format(date)
       };
+    }
+
+    function normalizePhone(value = "") {
+      let digits = String(value).replace(/\D/g, "");
+      // 將台灣國碼 886 開頭轉成一般 09 開頭格式，避免同一電話因格式不同而重複報名。
+      if (digits.startsWith("886")) digits = `0${digits.slice(3)}`;
+      return digits;
     }
 
     function isEventOpen(event) {
@@ -404,6 +420,7 @@
             </div>
             <div class="event-body">
               <p class="event-date">${escapeHtml(start.date)}${start.time !== "時間未定" ? ` · ${escapeHtml(start.time)}` : ""}</p>
+              <p class="event-deadline">${event.registration_deadline ? `報名截止：${escapeHtml(dateParts(event.registration_deadline).date)} ${escapeHtml(dateParts(event.registration_deadline).time)}` : "報名截止：未設定"}</p>
               <h3 class="event-title">${escapeHtml(event.title)}</h3>
               <p class="event-description">${escapeHtml(event.description || "歡迎報名參加，一起留下美好回憶。")}</p>
               <div class="event-meta">
@@ -444,6 +461,11 @@
     function openRegister(eventId) {
       const event = events.find(item => String(item.id) === String(eventId));
       if (!event) return;
+      if (!isEventOpen(event)) {
+        renderEvents();
+        showToast("這場活動已截止報名，無法再送出資料。", true);
+        return;
+      }
       modalFrame("填寫報名資料", event.title, `
         <form id="register-form" data-id="${escapeHtml(event.id)}">
           <div class="field"><label for="registrant-name">姓名 *</label><input id="registrant-name" name="name" maxlength="100" required autocomplete="name" placeholder="請填寫真實姓名"></div>
@@ -463,7 +485,7 @@
           const timestamp = person.created_at ? new Intl.DateTimeFormat("zh-TW", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(person.created_at)) : "已報名";
           return `<li class="roster-item"><span class="roster-name">${escapeHtml(person.name)}${person.phone ? `<span class="roster-detail">${escapeHtml(person.phone)}</span>` : ""}</span><span class="roster-detail">${escapeHtml(timestamp)}</span></li>`;
         }).join("") : '<li class="empty-state" style="padding:25px">目前還沒有人報名，成為第一位吧。</li>';
-        dialogInner.querySelector(".modal-content").innerHTML = `<ul class="roster-list">${rows}</ul>${event.status === "open" ? `<div class="modal-actions"><button class="button button-danger" type="button" data-action="close-event" data-id="${escapeHtml(event.id)}">停止報名</button></div>` : ""}`;
+        dialogInner.querySelector(".modal-content").innerHTML = `<ul class="roster-list">${rows}</ul>${isEventOpen(event) ? `<div class="modal-actions"><button class="button button-danger" type="button" data-action="close-event" data-id="${escapeHtml(event.id)}">停止報名</button></div>` : ""}`;
       } catch (error) {
         dialogInner.querySelector(".modal-content").innerHTML = `<p style="margin:0;color:#9d4c36;font-size:13px">${escapeHtml(error.message)}</p>`;
       }
@@ -519,6 +541,7 @@
           const start = data.starts_at ? new Date(data.starts_at) : null;
           const end = data.ends_at ? new Date(data.ends_at) : null;
           if (start && end && end <= start) throw new Error("活動結束時間需晚於開始時間。");
+          if (data.registration_deadline && new Date(data.registration_deadline).getTime() <= Date.now()) throw new Error("報名截止時間必須晚於現在。");
           for (const key of ["starts_at", "ends_at", "registration_deadline"]) data[key] = data[key] ? new Date(data[key]).toISOString() : null;
           data.status = "open";
           await createEvent(data);
@@ -527,11 +550,12 @@
         } else if (form.id === "register-form") {
           const data = Object.fromEntries(formData.entries());
           data.name = data.name.trim();
-          data.phone = data.phone.trim();
+          data.phone = normalizePhone(data.phone);
           if (!data.name || !data.phone) throw new Error("請填寫姓名與聯絡電話。");
+          if (data.phone.length < 8 || data.phone.length > 15) throw new Error("請輸入正確的聯絡電話。");
           await submitRegistration(form.dataset.id, data);
           dialog.close();
-          showToast("報名成功！期待活動當天見到你。");
+          showToast(demoMode ? "展示模式：報名資料只儲存在目前瀏覽器，尚未寫入 PostgreSQL。" : "報名成功！期待活動當天見到你。");
         }
       } catch (error) {
         showToast(error.message || "操作失敗，請稍後再試。", true);
